@@ -1,0 +1,176 @@
+---
+globs: core/src/banking_stage/**/*.rs
+---
+# Banking Stage Performance Optimization
+
+The banking stage is the heart of transaction processing in Agave. For a trading bot node, optimizing this component is critical for low-latency transaction processing and staying synchronized with the network.
+
+## Architecture Overview
+
+The banking stage uses a multi-threaded architecture:
+1. **Packet Receiver** - Receives transaction packets from the network
+2. **Packet Deserializer** - Deserializes packets into transactions
+3. **Transaction Scheduler** - Schedules transactions for processing
+4. **Consumer Threads** - Process transactions and update state
+5. **Committer** - Commits processed transactions to the ledger
+
+## Key Performance Areas
+
+### 1. Transaction Scheduling
+The `PrioGraphScheduler` and `SchedulerController` manage transaction ordering and dependencies.
+
+**Optimization Opportunities:**
+- Reduce lock contention in the scheduler
+- Optimize the priority queue implementation
+- Batch scheduling decisions
+- Use lock-free data structures for the transaction queue
+
+### 2. Consumer Thread Optimization
+Located in `consumer.rs` and `consume_worker.rs`.
+
+**Optimization Strategies:**
+- Minimize account lock holding time
+- Batch database operations
+- Use thread-local caches for frequently accessed data
+- Optimize the transaction execution pipeline
+
+### 3. QoS Service
+The Quality of Service layer manages transaction costs and limits.
+
+**Improvements:**
+- Cache cost calculations
+- Use atomic operations for cost tracking
+- Implement efficient cost estimation algorithms
+
+## Specific Optimizations
+
+### 1. Replace HashMap with FxHashMap
+```rust
+// In transaction_scheduler/scheduler_container.rs
+use rustc_hash::FxHashMap;
+// Replace std::collections::HashMap usage
+```
+
+### 2. Optimize Lock Patterns
+```rust
+// Current pattern (potentially inefficient)
+let guard = lock.write().unwrap();
+let value = guard.get(&key).cloned();
+drop(guard);
+
+// Optimized pattern
+let value = {
+    let guard = lock.read().unwrap();
+    guard.get(&key).cloned()
+};
+```
+
+### 3. Batch Processing
+```rust
+// Process transactions in optimal batch sizes
+const OPTIMAL_BATCH_SIZE: usize = 128; // Tune based on profiling
+
+// Pre-allocate batch storage
+let mut batch = Vec::with_capacity(OPTIMAL_BATCH_SIZE);
+```
+
+### 4. Cache Line Optimization
+```rust
+// Align frequently accessed data to cache lines
+#[repr(align(64))]
+struct HotData {
+    // Frequently accessed fields
+}
+```
+
+### 5. Reduce Allocations in Hot Paths
+```rust
+// Use object pools for temporary allocations
+use crossbeam::queue::SegQueue;
+static BUFFER_POOL: Lazy<SegQueue<Vec<u8>>> = Lazy::new(SegQueue::new);
+
+fn get_buffer() -> Vec<u8> {
+    BUFFER_POOL.pop().unwrap_or_else(|| Vec::with_capacity(1024))
+}
+
+fn return_buffer(mut buffer: Vec<u8>) {
+    buffer.clear();
+    BUFFER_POOL.push(buffer);
+}
+```
+
+## Transaction Processing Pipeline
+
+### 1. Packet Reception Optimization
+- Use larger UDP receive buffers
+- Implement kernel bypass techniques (DPDK/XDP) if possible
+- Batch packet processing
+
+### 2. Deserialization Optimization
+- Use zero-copy deserialization where possible
+- Parallelize signature verification
+- Cache verification results
+
+### 3. Account Loading Optimization
+- Implement read-ahead for account data
+- Use memory-mapped files for account storage
+- Cache frequently accessed accounts
+
+## Monitoring and Metrics
+
+### Key Metrics to Track
+1. **Transaction throughput** (TPS)
+2. **Transaction latency** (p50, p95, p99)
+3. **Lock contention** statistics
+4. **Memory allocation** rates
+5. **CPU utilization** per thread
+
+### Profiling Focus Areas
+```rust
+// Add timing measurements
+use solana_measure::measure;
+let mut process_time = measure::Measure::start("process_transactions");
+// ... processing logic ...
+process_time.stop();
+datapoint_info!("banking_stage_timing", 
+    ("process_us", process_time.as_us(), i64));
+```
+
+## Trading Bot Specific Optimizations
+
+For a trading bot node, prioritize:
+
+1. **Minimal Transaction Latency**
+   - Skip non-essential validation for trusted transactions
+   - Implement fast-path for simple transfers
+   - Optimize for single-threaded performance if transaction volume is low
+
+2. **Slot Synchronization**
+   - Prioritize processing of new slots
+   - Implement aggressive catch-up mechanisms
+   - Skip transaction replay for old slots
+
+3. **Memory Efficiency**
+   - Reduce transaction history retention
+   - Implement aggressive garbage collection
+   - Use compact data structures
+
+## Testing Optimizations
+
+1. **Benchmark Individual Components**
+```rust
+#[bench]
+fn bench_transaction_scheduling(b: &mut Bencher) {
+    // Benchmark scheduler performance
+}
+```
+
+2. **Load Testing**
+   - Simulate high transaction volumes
+   - Test with realistic transaction patterns
+   - Measure performance under memory pressure
+
+3. **Integration Testing**
+   - Test the full pipeline performance
+   - Verify correctness under optimization
+   - Check for race conditions

@@ -1,0 +1,85 @@
+---
+alwaysApply: true
+---
+# Instrumentation and Benchmarks - v0
+
+Add measurement first, then optimize. This rule standardizes how we collect timings and perf data.
+
+## Timing Macros
+
+- Prefer `solana_measure::measure::Measure` for scoped timers.
+- Wrap hot functions with timing datapoints:
+```rust
+use solana_measure::measure::Measure;
+use solana_metrics::datapoint_info;
+
+fn hot_path() {
+    let mut m = Measure::start("hot_path");
+    // ... work ...
+    m.stop();
+    datapoint_info!("perf_hot_path", ("us", m.as_us(), i64));
+}
+```
+
+## Aggregated Histograms
+
+- Record p50/p95/p99 using `histogram` crate already used in banking_stage:
+```rust
+let hist = Histogram::new();
+// record durations
+```
+
+## Lock Contention Tracking
+
+- Annotate critical locks with contention counters:
+```rust
+use std::sync::atomic::{AtomicU64, Ordering};
+static LOCK_WAIT_US: AtomicU64 = AtomicU64::new(0);
+
+fn with_lock<T>(lock: &parking_lot::Mutex<T>, f: impl FnOnce(&mut T)) {
+    let start = std::time::Instant::now();
+    let mut guard = lock.lock();
+    LOCK_WAIT_US.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
+    f(&mut guard);
+}
+```
+
+## Bench Framework
+
+- Use criterion for microbenchmarks:
+```rust
+// benches/banking_stage_benches.rs
+use criterion::{criterion_group, criterion_main, Criterion};
+
+fn bench_scheduler(c: &mut Criterion) {
+    c.bench_function("prio_graph_scheduler", |b| b.iter(|| run_scheduler_once()));
+}
+
+criterion_group!(benches, bench_scheduler);
+criterion_main!(benches);
+```
+
+## Perf/Flamegraph
+
+- Record CPU profiles:
+```bash
+cargo install flamegraph
+perf record -F 999 -g -- ./target/release/agave-validator --your-flags
+perf script | stackcollapse-perf.pl | flamegraph.pl > flame.svg
+```
+
+## Memory Profiling
+
+- jemalloc heap profile:
+```bash
+export MALLOC_CONF=prof:true,prof_active:true,prof_leak:true
+```
+
+- heaptrack:
+```bash
+heaptrack ./target/release/agave-validator --your-flags
+```
+
+## Acceptance Criteria
+
+- Every optimization PR must include before/after timings, CPU, memory deltas, and net effect on slot catch-up speed.

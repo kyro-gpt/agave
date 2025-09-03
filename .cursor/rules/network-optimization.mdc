@@ -1,0 +1,300 @@
+---
+globs: streamer/**/*.rs,turbine/**/*.rs,core/src/shred_fetch_stage.rs
+---
+# Network and Packet Processing Optimization
+
+Network performance is critical for a trading bot node to receive updates quickly and stay synchronized with the cluster. This guide covers optimizations for packet reception, shred processing, and network I/O.
+
+## Architecture Overview
+
+Key components:
+- **Streamer** - Low-level UDP packet handling
+- **Turbine** - Shred propagation and retransmission
+- **ShredFetchStage** - Receives and validates shreds
+- **RetransmitStage** - Forwards shreds to other nodes
+
+## Performance Bottlenecks
+
+### 1. UDP Packet Processing
+- Kernel buffer limitations
+- Context switches for packet reception
+- Packet batching inefficiencies
+
+### 2. Shred Processing
+- Signature verification overhead
+- Deduplication costs
+- Deserialization overhead
+
+### 3. Network I/O
+- System call overhead
+- Buffer copying
+- Network congestion
+
+## Optimization Strategies
+
+### 1. Kernel Bypass (XDP/DPDK)
+```rust
+// Use XDP for packet filtering
+#[cfg(target_os = "linux")]
+mod xdp_optimization {
+    use xdp::{XdpSocket, XdpSocketConfig};
+    
+    pub fn create_xdp_socket(ifname: &str) -> Result<XdpSocket> {
+        let config = XdpSocketConfig {
+            rx_queue_size: 4096,
+            tx_queue_size: 4096,
+            // Enable zero-copy
+            zero_copy: true,
+            // Use huge pages
+            use_huge_pages: true,
+        };
+        XdpSocket::new(ifname, 0, config)
+    }
+}
+```
+
+### 2. Optimize UDP Buffer Sizes
+```rust
+// In streamer/src/socket.rs
+pub fn configure_socket(socket: &UdpSocket) -> Result<()> {
+    // Increase receive buffer
+    socket.set_recv_buffer_size(64 * 1024 * 1024)?;
+    
+    // Enable SO_REUSEPORT for load balancing
+    #[cfg(target_os = "linux")]
+    {
+        use nix::sys::socket::{setsockopt, sockopt::ReusePort};
+        setsockopt(socket.as_raw_fd(), ReusePort, &true)?;
+    }
+    
+    // Disable Nagle's algorithm
+    socket.set_nodelay(true)?;
+    
+    Ok(())
+}
+```
+
+### 3. Packet Batching Optimization
+```rust
+// In packet.rs
+pub const OPTIMAL_BATCH_SIZE: usize = 256; // Increase from 64
+
+pub fn recv_from_optimized(
+    batch: &mut PinnedPacketBatch,
+    socket: &UdpSocket,
+) -> Result<usize> {
+    // Use recvmmsg for multiple packets
+    #[cfg(target_os = "linux")]
+    {
+        use libc::{recvmmsg, mmsghdr};
+        let mut msgs: Vec<mmsghdr> = vec![/*...*/];
+        let n = unsafe {
+            recvmmsg(
+                socket.as_raw_fd(),
+                msgs.as_mut_ptr(),
+                msgs.len() as u32,
+                0,
+                std::ptr::null(),
+            )
+        };
+        // Process received packets
+    }
+}
+```
+
+### 4. Zero-Copy Packet Processing
+```rust
+// Avoid copying packet data
+pub struct ZeroCopyPacket {
+    data: Pin<Box<[u8]>>,
+    meta: Meta,
+}
+
+impl ZeroCopyPacket {
+    pub fn slice(&self, range: Range<usize>) -> &[u8] {
+        &self.data[range]
+    }
+}
+```
+
+### 5. Parallel Signature Verification
+```rust
+// In sigverify_shreds.rs
+use rayon::prelude::*;
+
+pub fn verify_shreds_parallel(shreds: &[Shred]) -> Vec<bool> {
+    shreds.par_iter()
+        .map(|shred| shred.verify_signature())
+        .collect()
+}
+```
+
+## Shred Processing Optimization
+
+### 1. Optimized Deduplication
+```rust
+// Use efficient data structure for deduplication
+use cuckoofilter::{CuckooFilter, DefaultHasher};
+
+pub struct OptimizedShredDeduper {
+    filter: CuckooFilter<DefaultHasher>,
+}
+
+impl OptimizedShredDeduper {
+    pub fn check_and_insert(&mut self, shred_id: &ShredId) -> bool {
+        self.filter.add(shred_id).is_ok()
+    }
+}
+```
+
+### 2. SIMD Optimization
+```rust
+// Use SIMD for batch operations
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+unsafe fn verify_shreds_simd(shreds: &[Shred]) -> Vec<bool> {
+    // Implement SIMD verification
+    // Process multiple signatures in parallel
+}
+```
+
+### 3. Memory Pool for Packets
+```rust
+// Reuse packet buffers
+use crossbeam::queue::SegQueue;
+
+pub struct PacketPool {
+    pool: SegQueue<PinnedPacketBatch>,
+}
+
+impl PacketPool {
+    pub fn get(&self) -> PinnedPacketBatch {
+        self.pool.pop().unwrap_or_else(|| {
+            PinnedPacketBatch::new_with_capacity(OPTIMAL_BATCH_SIZE)
+        })
+    }
+    
+    pub fn return_batch(&self, mut batch: PinnedPacketBatch) {
+        batch.clear();
+        self.pool.push(batch);
+    }
+}
+```
+
+## Trading Bot Specific Optimizations
+
+### 1. Selective Shred Processing
+```rust
+// Only process shreds relevant to trading
+pub fn filter_trading_shreds(shreds: Vec<Shred>) -> Vec<Shred> {
+    shreds.into_iter()
+        .filter(|shred| {
+            // Filter for slots containing trading transactions
+            // Skip vote-only shreds
+            // Prioritize recent slots
+        })
+        .collect()
+}
+```
+
+### 2. Fast Path for Critical Updates
+```rust
+// Implement priority queue for important packets
+pub struct PriorityPacketReceiver {
+    high_priority: Receiver<PacketBatch>,
+    normal: Receiver<PacketBatch>,
+}
+
+impl PriorityPacketReceiver {
+    pub fn recv_priority(&self) -> Result<PacketBatch> {
+        // Check high priority first
+        match self.high_priority.try_recv() {
+            Ok(batch) => Ok(batch),
+            Err(_) => self.normal.recv(),
+        }
+    }
+}
+```
+
+### 3. Network Topology Optimization
+```rust
+// Connect directly to high-quality validators
+pub fn optimize_peer_connections(cluster_info: &ClusterInfo) {
+    // Prefer validators with:
+    // - Low latency
+    // - High stake
+    // - Good reputation
+    // - Geographic proximity
+}
+```
+
+## Monitoring and Metrics
+
+### Key Network Metrics
+1. **Packet reception rate**
+2. **Packet drop rate**
+3. **Shred verification throughput**
+4. **Network latency to peers**
+5. **Retransmission rate**
+
+### Profiling Network Performance
+```rust
+// Add detailed metrics
+datapoint_info!("network_metrics",
+    ("packets_received", packets_received, i64),
+    ("packets_dropped", packets_dropped, i64),
+    ("shreds_verified", shreds_verified, i64),
+    ("verify_us", verify_time.as_us(), i64),
+);
+```
+
+## Testing Strategy
+
+### 1. Network Stress Testing
+```rust
+#[test]
+fn test_high_packet_rate() {
+    // Simulate high packet rates
+    // Measure drop rates
+    // Test buffer limits
+}
+```
+
+### 2. Latency Testing
+- Measure end-to-end packet latency
+- Test with various packet sizes
+- Simulate network congestion
+
+### 3. CPU Efficiency
+- Profile CPU usage during packet processing
+- Optimize hot paths
+- Measure context switch overhead
+
+## Advanced Optimizations
+
+### 1. CPU Affinity
+```rust
+// Pin network threads to specific cores
+use core_affinity;
+
+pub fn setup_network_thread_affinity() {
+    let core_ids = core_affinity::get_core_ids().unwrap();
+    // Assign network threads to cores
+    // Avoid NUMA boundaries
+}
+```
+
+### 2. Interrupt Coalescing
+```bash
+# Configure NIC for optimal interrupt handling
+ethtool -C eth0 rx-usecs 100 rx-frames 64
+```
+
+### 3. Kernel Tuning
+```bash
+# Increase network buffers
+sysctl -w net.core.rmem_max=134217728
+sysctl -w net.core.wmem_max=134217728
+sysctl -w net.core.netdev_max_backlog=5000
+```

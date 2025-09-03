@@ -1,0 +1,36 @@
+---
+globs: core/src/**/*.rs,accounts-db/**/*.rs,streamer/**/*.rs,turbine/**/*.rs
+---
+# Component Optimizations - v1
+
+Sharper guidance beyond v0 baseline.
+
+## Banking Stage v1
+- Prefer `parking_lot::{Mutex,RwLock}` for short critical sections.
+- Shard transaction queues by writable account key hash to reduce lock collisions.
+- Pre-partition incoming transactions by write-set to increase parallelism.
+- Use `SmallVec<[AccountKey; 8]>` for typical small key lists in locks.
+
+## Accounts DB v1
+- Enable read-ahead for same-storage account loads; coalesce offsets.
+- Maintain per-appendvec bloom filters for existence checks before disk touches.
+- Background compaction: pack ancient storages when fragmentation > 30%.
+
+## Networking v1
+- Increase PACKETS_PER_BATCH adaptively based on measured socket backlog.
+- Use a packet pool; avoid per-iteration allocations.
+- Deduper: switch to CuckooFilter with bounded false positives and periodic rotation.
+
+## Consensus / Catch-up v1
+- Prioritize replay of newest slots; degrade old-slot fidelity when behind > 500 slots.
+- Skip non-critical metrics and debug logs under backpressure.
+- Batch vote verification and cache stake weights.
+
+## Telemetry v1
+- Emit per-thread CPU time, run queue length, and lock wait time to a single rolling log.
+- Alert if slot lag > 8 for > 5s.
+
+## Safety
+- Wrap all v1 toggles behind a `TradingNodeTuning` config struct with kill-switches.
+- Include a `--tuning-profile=trading` CLI to enable these defaults.
+

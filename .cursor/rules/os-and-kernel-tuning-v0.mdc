@@ -1,0 +1,59 @@
+---
+description: OS and kernel tuning for low-latency validator nodes (Linux)
+---
+# OS and Kernel Tuning - v0 (Linux)
+
+Low-level system tweaks to reduce latency and improve throughput.
+
+## Network
+```bash
+# Buffer sizes
+sysctl -w net.core.rmem_max=134217728
+sysctl -w net.core.wmem_max=134217728
+sysctl -w net.core.netdev_max_backlog=50000
+
+# UDP tweaks
+sysctl -w net.ipv4.udp_rmem_min=4096
+sysctl -w net.ipv4.udp_wmem_min=4096
+
+# Disable reverse path filtering
+sysctl -w net.ipv4.conf.all.rp_filter=0
+```
+
+## CPU / Scheduling
+```bash
+# Performance governor
+for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance | sudo tee $cpu; done
+
+# Isolate cores for networking
+GRUB_CMDLINE_LINUX="isolcpus=2-5 nohz_full=2-5 rcu_nocbs=2-5"
+```
+
+## Filesystem / IO
+```bash
+# Increase file descriptors
+ulimit -n 1048576
+
+# Disable atime updates
+mount -o noatime,discard /dev/nvme0n1p1 /data
+```
+
+## NUMA
+```bash
+# Bind process to a NUMA node
+numactl --cpunodebind=0 --membind=0 ./agave-validator ...
+```
+
+## NIC
+```bash
+# Interrupt coalescing (example; tune per NIC)
+ethtool -C eth0 rx-usecs 100 rx-frames 64 tx-usecs 100 tx-frames 64
+
+# RSS queues
+ethtool -L eth0 combined 8
+```
+
+Notes:
+- Validate changes with latency benchmarks.
+- Prefer pinning networking threads to isolated cores.
+

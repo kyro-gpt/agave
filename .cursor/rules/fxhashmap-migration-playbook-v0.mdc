@@ -1,0 +1,53 @@
+---
+globs: *.rs
+---
+# FxHashMap Migration Playbook - v0
+
+Standardized approach to replacing `std::collections::HashMap` with `rustc_hash::FxHashMap` safely.
+
+## When to Migrate
+- Key type is integer-like (e.g., `u64`, `Slot`, `Pubkey` when hashed via bytes).
+- Map is in a hot path or large (memory heavy).
+- HashDoS resistance is not a concern (internal maps only).
+
+## How to Migrate
+
+1. Add dependency (if not present):
+```toml
+[dependencies]
+rustc-hash = "1"
+```
+
+2. Replace imports:
+```rust
+// Before
+use std::collections::HashMap;
+// After
+use rustc_hash::FxHashMap as HashMap;
+```
+
+3. Initialize with capacity when possible:
+```rust
+let mut map: HashMap<K, V> = HashMap::with_capacity_and_hasher(expected, Default::default());
+```
+
+4. For concurrent access, consider `dashmap::DashMap` and shard by key space.
+
+## Audit Checklist
+- Ensure no public API changes (type aliases can help):
+```rust
+pub type FastMap<K, V> = rustc_hash::FxHashMap<K, V>;
+```
+- Verify serialization code paths (FxHashMap is not serde-compatible by default; wrap with Vec if needed).
+- Validate determinism not required across runs; FxHash is stable within a run but not guaranteed across platforms.
+
+## Rollout Plan
+- Start with read-mostly maps.
+- Land per-module PRs with microbenchmarks.
+- Monitor memory deltas from allocator stats.
+
+## Pitfalls
+- Don’t migrate security-sensitive maps.
+- Beware iteration order dependencies.
+- Adjust test expectations if relying on hash order.
+

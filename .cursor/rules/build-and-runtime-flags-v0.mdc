@@ -1,0 +1,79 @@
+---
+alwaysApply: true
+---
+# Build and Runtime Flags - v0
+
+These settings give immediate perf gains with zero code changes.
+
+## Build Flags
+
+- RUSTFLAGS environment:
+```bash
+export RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C lto=fat -C codegen-units=1 -Z threads=$(nproc)"
+```
+- Cargo profiles (add to top-level Cargo.toml):
+```toml
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+strip = true
+
+[profile.bench]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = true
+```
+- Use mold/clang where available:
+```bash
+export RUSTFLAGS="$RUSTFLAGS -Clink-arg=-fuse-ld=mold"
+export CC=clang
+export CXX=clang++
+```
+
+## Feature Flags
+
+- Disable unused heavy features to slim binary and reduce code paths:
+```bash
+cargo build --release \
+  --no-default-features \
+  --features="runtime,validator,streamer,turbine,accounts-db"
+```
+(Adjust to the minimal set needed for a trading node.)
+
+## Runtime Flags
+
+- CPU affinity and thread limits:
+```bash
+export RAYON_NUM_THREADS=$(nproc)
+export SOLANA_RUST_THREAD_LIMIT=$(nproc)
+```
+- Reduce allocator fragmentation (jemalloc/mimalloc):
+```bash
+export MALLOC_CONF="background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
+```
+- Prefer jemalloc:
+```bash
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so
+```
+
+## Binary Launch
+
+- Example startup for validator optimized for trading bot use:
+```bash
+./agave-validator \
+  --no-os-network-limits-test \
+  --no-port-check \
+  --no-wait-for-vote-to-start-leader \
+  --limit-ledger-size 50000000 \
+  --rpc-pubsub-enable-block-subscription false \
+  --gossip-rumor-validation true
+```
+
+Notes:
+- Validate compatibility of jemalloc on macOS; use `MallocNanoZone=0` if necessary.
+- Ensure these flags are tested with microbenchmarks before rollout.
+

@@ -1,0 +1,227 @@
+---
+globs: *.rs
+---
+# Rust Performance Best Practices for Agave
+
+## Memory Management
+
+### Avoid Unnecessary Allocations
+- Use references instead of cloning when possible
+- Prefer `&str` over `String` for read-only string data
+- Use `Cow<str>` for strings that might need modification
+- Reuse buffers and allocations in loops
+
+### Smart Pointer Usage
+```rust
+// Prefer Arc for shared immutable data
+use std::sync::Arc;
+let shared_data = Arc::new(expensive_data);
+
+// Use Rc in single-threaded contexts
+use std::rc::Rc;
+
+// Consider Box for large stack allocations
+let large_array = Box::new([0u8; 1_000_000]);
+```
+
+### Collection Optimization
+```rust
+// Pre-allocate collections
+let mut vec = Vec::with_capacity(expected_size);
+let mut map = FxHashMap::with_capacity_and_hasher(expected_size, Default::default());
+
+// Use SmallVec for small collections
+use smallvec::SmallVec;
+let small_vec: SmallVec<[u32; 4]> = SmallVec::new();
+
+// Consider arrayvec for fixed-size collections
+use arrayvec::ArrayVec;
+let array_vec: ArrayVec<i32, 100> = ArrayVec::new();
+```
+
+## Concurrency Patterns
+
+### Lock-Free Alternatives
+```rust
+// Use atomic operations for simple shared state
+use std::sync::atomic::{AtomicU64, Ordering};
+let counter = AtomicU64::new(0);
+counter.fetch_add(1, Ordering::Relaxed);
+
+// Consider crossbeam for lock-free data structures
+use crossbeam::channel;
+use crossbeam::queue::SegQueue;
+```
+
+### Efficient Locking
+```rust
+// Use parking_lot for better performance
+use parking_lot::{RwLock, Mutex};
+
+// Minimize lock scope
+{
+    let guard = lock.write();
+    // Do minimal work here
+} // Lock released
+
+// Consider read-write locks for read-heavy workloads
+let data = Arc::new(RwLock::new(HashMap::new()));
+```
+
+### Thread Pool Usage
+```rust
+// Use rayon for data parallelism
+use rayon::prelude::*;
+data.par_iter()
+    .map(|item| process(item))
+    .collect::<Vec<_>>();
+
+// Configure thread pools appropriately
+rayon::ThreadPoolBuilder::new()
+    .num_threads(num_cpus::get())
+    .build_global()
+    .unwrap();
+```
+
+## I/O Optimization
+
+### Buffered I/O
+```rust
+use std::io::{BufReader, BufWriter};
+
+// Always buffer file I/O
+let file = File::open(path)?;
+let reader = BufReader::with_capacity(64 * 1024, file);
+
+// Use larger buffers for sequential reads
+let writer = BufWriter::with_capacity(128 * 1024, file);
+```
+
+### Memory-Mapped Files
+```rust
+// Use mmap for large file access
+use memmap2::MmapOptions;
+let file = File::open(path)?;
+let mmap = unsafe { MmapOptions::new().map(&file)? };
+```
+
+## Algorithm Optimization
+
+### Use Efficient Data Structures
+```rust
+// FxHashMap for integer keys
+use rustc_hash::FxHashMap;
+let mut map = FxHashMap::default();
+
+// BTreeMap for sorted data
+use std::collections::BTreeMap;
+
+// Consider specialized collections
+use indexmap::IndexMap; // Preserves insertion order
+use dashmap::DashMap; // Concurrent HashMap
+```
+
+### Avoid Repeated Computations
+```rust
+// Cache expensive computations
+use once_cell::sync::Lazy;
+static EXPENSIVE_COMPUTATION: Lazy<ComputedData> = Lazy::new(|| {
+    compute_expensive_data()
+});
+
+// Use memoization for recursive functions
+use cached::proc_macro::cached;
+#[cached]
+fn fibonacci(n: u64) -> u64 {
+    // Implementation
+}
+```
+
+## String Handling
+
+### Efficient String Operations
+```rust
+// Use string builders for concatenation
+let mut result = String::with_capacity(estimated_size);
+for part in parts {
+    result.push_str(part);
+}
+
+// Avoid format! in hot paths
+// Before
+let s = format!("{} {}", a, b);
+// After
+let mut s = String::with_capacity(a.len() + b.len() + 1);
+s.push_str(a);
+s.push(' ');
+s.push_str(b);
+```
+
+## Profiling and Measurement
+
+### Always Measure
+```rust
+// Use criterion for benchmarking
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn benchmark_function(c: &mut Criterion) {
+    c.bench_function("my_function", |b| {
+        b.iter(|| my_function(black_box(input)))
+    });
+}
+
+// Time critical sections
+use std::time::Instant;
+let start = Instant::now();
+// ... work ...
+let duration = start.elapsed();
+```
+
+## Agave-Specific Patterns
+
+### Account Processing
+```rust
+// Batch account operations
+let accounts: Vec<_> = pubkeys.iter()
+    .map(|pubkey| self.load_account(pubkey))
+    .collect();
+
+// Use parallel iterators for independent operations
+accounts.par_iter()
+    .filter(|account| account.lamports > 0)
+    .collect()
+```
+
+### Transaction Processing
+```rust
+// Process transactions in batches
+const BATCH_SIZE: usize = 64;
+for chunk in transactions.chunks(BATCH_SIZE) {
+    process_transaction_batch(chunk);
+}
+
+// Pre-verify signatures in parallel
+let valid_sigs: Vec<_> = transactions.par_iter()
+    .map(|tx| verify_signature(tx))
+    .collect();
+```
+
+## Common Pitfalls to Avoid
+
+1. **Don't use `.clone()` without thinking**
+   - Check if a reference would work
+   - Consider `Arc` for shared ownership
+   - Use `Cow` for conditional cloning
+
+2. **Don't neglect error handling performance**
+   - Use `Result` instead of panic in hot paths
+   - Consider custom error types to avoid allocations
+
+3. **Don't ignore iterator chains**
+   - Chain operations instead of collecting intermediate results
+   - Use `Iterator::fold` for complex reductions
+
+4. **Don't forget about cache locality**
+   - Keep related data together in memory
+   - Use struct-of-arrays for SIMD-friendly layouts
+   - Consider data access patterns when designing structures
