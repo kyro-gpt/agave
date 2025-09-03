@@ -56,26 +56,7 @@ export RAYON_NUM_THREADS=$(nproc)
 ./target/release/agave-validator --help
 ```
 
-### Milestone 0.3: Feature Flag Optimization (Day 2 Morning)
-**Tasks:**
-1. Identify minimal feature set for trading node
-2. Create trading-specific build profile
-3. Test with minimal features
-4. Document feature selection rationale
-
-**Acceptance Criteria:**
-- [ ] Minimal feature build works
-- [ ] Binary size reduced further
-- [ ] No essential functionality lost
-
-**Commands to run:**
-```bash
-# Test minimal build
-cargo build --release --no-default-features \
-  --features="runtime,validator,streamer,turbine,accounts-db"
-```
-
-### Milestone 0.4: Baseline Benchmarking (Day 2 Afternoon)
+### Milestone 0.3: Baseline Benchmarking (Day 2)
 **Tasks:**
 1. Set up benchmarking infrastructure
 2. Run baseline performance tests
@@ -101,13 +82,15 @@ cargo test --release --workspace
 - [ ] Build script with optimized flags
 - [ ] Runtime startup script
 - [ ] Baseline performance report
-- [ ] Feature flag documentation
 
 ## Files to Create/Modify
 - `Cargo.toml` (root level)
 - `scripts/build-optimized.sh`
 - `scripts/run-trading-node.sh`
 - `docs/performance-baseline.md`
+
+## Note on Functional Changes
+Feature flag optimization (minimal feature builds) has been moved to Phase 3 as it involves functional changes to the validator behavior. Phase 0 focuses purely on build and runtime configuration optimizations.
 
 ## Rollback Plan
 - Keep backup of original `Cargo.toml`
